@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           npm init -y
-          npm install express ws ssh2 uuid
+          npm install express ws ssh2 uuid@8.3.2
 
       - name: Install Tailscale
         run: |
