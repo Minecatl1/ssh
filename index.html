@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Web SSH via GitHub Actions + Tailscale</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css" />
+    <style>
+        body { background: #1e1e2f; color: #cdd6f4; font-family: monospace; padding: 20px; }
+        #terminal { background: #000; padding: 10px; border-radius: 8px; margin-top: 20px; }
+        .info { background: #313244; padding: 10px; border-radius: 8px; margin-bottom: 20px; }
+        input, button { background: #1e1e2f; border: 1px solid #45475a; color: #cdd6f4; padding: 5px 10px; }
+    </style>
+</head>
+<body>
+<h2>🔌 Web SSH (backend on GitHub Actions + Tailscale)</h2>
+<div class="info">
+    <label>WebSocket URL: </label>
+    <input type="text" id="wsUrl" style="width: 400px;">
+    <button id="connectBtn">Connect</button>
+    <button id="disconnectBtn">Disconnect</button>
+    <div id="status" style="margin-top: 10px;">⚪ Disconnected</div>
+</div>
+<div id="terminal"></div>
+<script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+<script>
+    // Read wsUrl from query parameter ?ws=...
+    const urlParams = new URLSearchParams(window.location.search);
+    let defaultWsUrl = urlParams.get('ws');
+    if (!defaultWsUrl) defaultWsUrl = 'ws://localhost:3000'; // fallback
+
+    const wsUrlInput = document.getElementById('wsUrl');
+    wsUrlInput.value = defaultWsUrl;
+
+    let socket = null;
+    let term = null;
+    let fitAddon = null;
+
+    term = new Terminal({ cursorBlink: true });
+    fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal'));
+    fitAddon.fit();
+
+    window.addEventListener('resize', () => {
+        fitAddon.fit();
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
+        }
+    });
+
+    function setStatus(text, isError = false) {
+        const statusDiv = document.getElementById('status');
+        statusDiv.innerHTML = text;
+        statusDiv.style.color = isError ? '#f38ba8' : '#a6e3a1';
+    }
+
+    function connect() {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            alert('Already connected');
+            return;
+        }
+
+        const wsUrl = wsUrlInput.value.trim();
+        if (!wsUrl) {
+            alert('Enter WebSocket URL');
+            return;
+        }
+
+        setStatus('Connecting to proxy...');
+        socket = new WebSocket(wsUrl);
+
+        socket.onopen = () => {
+            setStatus('Proxy connected, waiting for SSH connection...');
+            // Ask user for SSH details (simple prompt)
+            const host = prompt('Host (IP / tailnet name):', 'my-pc.tailnet-name.ts.net');
+            const port = prompt('Port:', '22');
+            const username = prompt('Username:', '');
+            const password = prompt('Password (leave empty for key):', '');
+            const privateKey = prompt('Private key (optional, paste whole PEM):', '');
+
+            if (!host || !username) {
+                setStatus('Host and username required', true);
+                socket.close();
+                return;
+            }
+
+            const connectMsg = { type: 'connect', host, port: parseInt(port,10), username };
+            if (privateKey && privateKey.trim()) connectMsg.privateKey = privateKey;
+            else if (password) connectMsg.password = password;
+            else {
+                setStatus('No password or key provided', true);
+                socket.close();
+                return;
+            }
+            socket.send(JSON.stringify(connectMsg));
+        };
+
+        socket.onmessage = (ev) => {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'connected') {
+                setStatus(`✅ SSH connected to ${host}`);
+                term.clear();
+                term.focus();
+            } else if (msg.type === 'data') {
+                term.write(msg.data);
+            } else if (msg.type === 'error') {
+                setStatus(`❌ ${msg.message}`, true);
+                socket.close();
+            } else if (msg.type === 'closed') {
+                setStatus('SSH session closed');
+                socket.close();
+            }
+        };
+
+        socket.onerror = () => setStatus('WebSocket error', true);
+        socket.onclose = () => {
+            setStatus('Disconnected');
+            socket = null;
+        };
+
+        term.onData((data) => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'data', data }));
+            }
+        });
+    }
+
+    function disconnect() {
+        if (socket) socket.close();
+        setStatus('Disconnected');
+    }
+
+    document.getElementById('connectBtn').onclick = connect;
+    document.getElementById('disconnectBtn').onclick = disconnect;
+</script>
+</body>
+</html>
