@@ -2,137 +2,427 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Web SSH via GitHub Actions + Tailscale</title>
+    <title>Web SSH + VNC via Tailscale</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
-        body { background: #1e1e2f; color: #cdd6f4; font-family: monospace; padding: 20px; }
-        #terminal { background: #000; padding: 10px; border-radius: 8px; margin-top: 20px; }
-        .info { background: #313244; padding: 10px; border-radius: 8px; margin-bottom: 20px; }
-        input, button { background: #1e1e2f; border: 1px solid #45475a; color: #cdd6f4; padding: 5px 10px; }
+        body {
+            background: #1e1e2f;
+            color: #cdd6f4;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #45475a;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            background: #313244;
+            border-radius: 8px 8px 0 0;
+            transition: 0.2s;
+        }
+        .tab.active {
+            background: #89b4fa;
+            color: #1e1e2f;
+            font-weight: bold;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .connection-form {
+            background: #313244;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: flex-end;
+        }
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .form-group label {
+            font-size: 0.8rem;
+            color: #a6adc8;
+        }
+        input, button, textarea {
+            background: #1e1e2f;
+            border: 1px solid #45475a;
+            color: #cdd6f4;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+        button {
+            background: #89b4fa;
+            color: #1e1e2f;
+            font-weight: bold;
+            cursor: pointer;
+            border: none;
+        }
+        button:hover {
+            background: #b4befe;
+        }
+        .status {
+            margin-bottom: 10px;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        .status.connected { background: #a6e3a1; color: #1e1e2f; }
+        .status.disconnected { background: #f38ba8; color: #1e1e2f; }
+        #terminal, #vnc-canvas {
+            background: #000;
+            padding: 10px;
+            border-radius: 8px;
+            min-height: 500px;
+        }
+        #vnc-canvas canvas {
+            width: 100%;
+            height: auto;
+            background: #000;
+        }
+        .footer {
+            margin-top: 20px;
+            font-size: 0.8rem;
+            text-align: center;
+            color: #6c7086;
+        }
     </style>
 </head>
 <body>
-<h2>🔌 Web SSH (backend on GitHub Actions + Tailscale)</h2>
-<div class="info">
-    <label>WebSocket URL: </label>
-    <input type="text" id="wsUrl" style="width: 400px;">
-    <button id="connectBtn">Connect</button>
-    <button id="disconnectBtn">Disconnect</button>
-    <div id="status" style="margin-top: 10px;">⚪ Disconnected</div>
+<div class="container">
+    <h2><i class="fas fa-network-wired"></i> Web SSH + VNC (Tailscale backend)</h2>
+    <div class="tabs">
+        <div class="tab active" data-tab="ssh">🖥️ SSH Terminal</div>
+        <div class="tab" data-tab="vnc">🖼️ VNC Desktop</div>
+    </div>
+
+    <!-- SSH Tab -->
+    <div id="ssh-tab" class="tab-content active">
+        <div class="connection-form">
+            <div class="form-group">
+                <label>Host (IP / tailnet name)</label>
+                <input type="text" id="ssh-host" placeholder="my-pc.tailnet-name.ts.net">
+            </div>
+            <div class="form-group">
+                <label>Port</label>
+                <input type="number" id="ssh-port" value="22">
+            </div>
+            <div class="form-group">
+                <label>Username</label>
+                <input type="text" id="ssh-username">
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="ssh-password">
+            </div>
+            <div class="form-group">
+                <label>Private Key (PEM)</label>
+                <textarea id="ssh-privateKey" rows="1" placeholder="-----BEGIN RSA PRIVATE KEY-----..."></textarea>
+            </div>
+            <button id="ssh-connect">🔌 Connect SSH</button>
+            <button id="ssh-disconnect">❌ Disconnect</button>
+        </div>
+        <div id="ssh-status" class="status disconnected">Disconnected</div>
+        <div id="terminal"></div>
+    </div>
+
+    <!-- VNC Tab -->
+    <div id="vnc-tab" class="tab-content">
+        <div class="connection-form">
+            <div class="form-group">
+                <label>VNC Host (IP / tailnet name)</label>
+                <input type="text" id="vnc-host" placeholder="my-desktop.tailnet-name.ts.net">
+            </div>
+            <div class="form-group">
+                <label>VNC Port (usually 5900 or 5901)</label>
+                <input type="number" id="vnc-port" value="5900">
+            </div>
+            <button id="vnc-connect">🖥️ Connect VNC</button>
+            <button id="vnc-disconnect">❌ Disconnect</button>
+        </div>
+        <div id="vnc-status" class="status disconnected">Disconnected</div>
+        <div id="vnc-canvas"></div>
+    </div>
+    <div class="footer">
+        💡 Backend runs on GitHub Actions + Tailscale (ephemeral).<br>
+        SSH uses password/key. VNC uses raw TCP forwarding – works with any VNC server.
+    </div>
 </div>
-<div id="terminal"></div>
+
 <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
-<script>
-    // Read wsUrl from query parameter ?ws=...
-    const urlParams = new URLSearchParams(window.location.search);
-    let defaultWsUrl = urlParams.get('ws');
-    if (!defaultWsUrl) defaultWsUrl = 'ws://localhost:3000'; // fallback
+<script src="https://cdn.jsdelivr.net/npm/@novnc/novnc/core/rfb.js"></script>
 
-    const wsUrlInput = document.getElementById('wsUrl');
-    wsUrlInput.value = defaultWsUrl;
+<script>
+    // === CONFIGURE BACKEND WEBSOCKET URL ===
+    // Change this to your backend's WebSocket endpoint (same for SSH and VNC)
+    const BACKEND_WS_URL = 'ws://<YOUR_BACKEND_IP_OR_DOMAIN>:3000';
+    // =====================================
 
     let socket = null;
+    let currentProtocol = null; // 'ssh' or 'vnc'
+    
+    // SSH elements
     let term = null;
     let fitAddon = null;
+    
+    // VNC elements
+    let rfb = null;
+    let vncCanvas = null;
 
-    term = new Terminal({ cursorBlink: true });
+    // Initialize xterm
+    const terminalDiv = document.getElementById('terminal');
+    term = new Terminal({ cursorBlink: true, fontSize: 14 });
     fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
-    term.open(document.getElementById('terminal'));
+    term.open(terminalDiv);
     fitAddon.fit();
-
     window.addEventListener('resize', () => {
-        fitAddon.fit();
-        if (socket && socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
-        }
+        if (currentProtocol === 'ssh' && fitAddon) fitAddon.fit();
     });
 
-    function setStatus(text, isError = false) {
-        const statusDiv = document.getElementById('status');
-        statusDiv.innerHTML = text;
-        statusDiv.style.color = isError ? '#f38ba8' : '#a6e3a1';
+    // Helper: update status display
+    function setStatus(protocol, text, isConnected) {
+        const statusDiv = protocol === 'ssh' ? document.getElementById('ssh-status') : document.getElementById('vnc-status');
+        statusDiv.textContent = text;
+        statusDiv.className = `status ${isConnected ? 'connected' : 'disconnected'}`;
     }
 
-    function connect() {
+    // Disconnect any active session
+    function disconnect(protocol) {
         if (socket && socket.readyState === WebSocket.OPEN) {
-            alert('Already connected');
+            socket.close();
+        }
+        socket = null;
+        if (protocol === 'ssh') {
+            setStatus('ssh', 'Disconnected', false);
+            term.clear();
+        } else if (protocol === 'vnc') {
+            if (rfb) {
+                rfb.disconnect();
+                rfb = null;
+            }
+            setStatus('vnc', 'Disconnected', false);
+            const container = document.getElementById('vnc-canvas');
+            container.innerHTML = ''; // remove canvas if any
+        }
+        currentProtocol = null;
+    }
+
+    // SSH connection
+    function connectSSH() {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            alert('Already connected. Disconnect first.');
+            return;
+        }
+        const host = document.getElementById('ssh-host').value.trim();
+        const port = parseInt(document.getElementById('ssh-port').value, 10);
+        const username = document.getElementById('ssh-username').value.trim();
+        const password = document.getElementById('ssh-password').value;
+        const privateKey = document.getElementById('ssh-privateKey').value.trim();
+
+        if (!host || !username) {
+            alert('Host and username required');
             return;
         }
 
-        const wsUrl = wsUrlInput.value.trim();
-        if (!wsUrl) {
-            alert('Enter WebSocket URL');
-            return;
-        }
-
-        setStatus('Connecting to proxy...');
-        socket = new WebSocket(wsUrl);
+        setStatus('ssh', 'Connecting via WebSocket...', false);
+        socket = new WebSocket(BACKEND_WS_URL);
+        currentProtocol = 'ssh';
 
         socket.onopen = () => {
-            setStatus('Proxy connected, waiting for SSH connection...');
-            // Ask user for SSH details (simple prompt)
-            const host = prompt('Host (IP / tailnet name):', 'my-pc.tailnet-name.ts.net');
-            const port = prompt('Port:', '22');
-            const username = prompt('Username:', '');
-            const password = prompt('Password (leave empty for key):', '');
-            const privateKey = prompt('Private key (optional, paste whole PEM):', '');
-
-            if (!host || !username) {
-                setStatus('Host and username required', true);
-                socket.close();
-                return;
-            }
-
-            const connectMsg = { type: 'connect', host, port: parseInt(port,10), username };
-            if (privateKey && privateKey.trim()) connectMsg.privateKey = privateKey;
+            const connectMsg = {
+                type: 'connect',
+                protocol: 'ssh',
+                host, port, username
+            };
+            if (privateKey) connectMsg.privateKey = privateKey;
             else if (password) connectMsg.password = password;
             else {
-                setStatus('No password or key provided', true);
+                setStatus('ssh', 'Error: No password or private key', false);
                 socket.close();
                 return;
             }
             socket.send(JSON.stringify(connectMsg));
         };
 
-        socket.onmessage = (ev) => {
-            const msg = JSON.parse(ev.data);
-            if (msg.type === 'connected') {
-                setStatus(`✅ SSH connected to ${host}`);
-                term.clear();
-                term.focus();
-            } else if (msg.type === 'data') {
-                term.write(msg.data);
-            } else if (msg.type === 'error') {
-                setStatus(`❌ ${msg.message}`, true);
-                socket.close();
-            } else if (msg.type === 'closed') {
-                setStatus('SSH session closed');
-                socket.close();
+        socket.onmessage = (event) => {
+            if (typeof event.data === 'string') {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'connected') {
+                    setStatus('ssh', `SSH connected to ${host}:${port}`, true);
+                    term.focus();
+                } else if (msg.type === 'data') {
+                    term.write(msg.data);
+                } else if (msg.type === 'error') {
+                    setStatus('ssh', `Error: ${msg.message}`, false);
+                    socket.close();
+                } else if (msg.type === 'closed') {
+                    setStatus('ssh', 'SSH session closed', false);
+                    socket.close();
+                }
             }
         };
 
-        socket.onerror = () => setStatus('WebSocket error', true);
+        socket.onerror = () => setStatus('ssh', 'WebSocket error', false);
         socket.onclose = () => {
-            setStatus('Disconnected');
+            setStatus('ssh', 'Disconnected', false);
             socket = null;
+            currentProtocol = null;
         };
 
         term.onData((data) => {
-            if (socket && socket.readyState === WebSocket.OPEN) {
+            if (socket && socket.readyState === WebSocket.OPEN && currentProtocol === 'ssh') {
                 socket.send(JSON.stringify({ type: 'data', data }));
             }
         });
     }
 
-    function disconnect() {
-        if (socket) socket.close();
-        setStatus('Disconnected');
+    // VNC connection using noVNC
+    function connectVNC() {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            alert('Already connected. Disconnect first.');
+            return;
+        }
+        const host = document.getElementById('vnc-host').value.trim();
+        const port = parseInt(document.getElementById('vnc-port').value, 10);
+        if (!host) {
+            alert('VNC host required');
+            return;
+        }
+
+        setStatus('vnc', 'Connecting WebSocket...', false);
+        socket = new WebSocket(BACKEND_WS_URL);
+        currentProtocol = 'vnc';
+
+        socket.onopen = () => {
+            const connectMsg = {
+                type: 'connect',
+                protocol: 'vnc',
+                host,
+                port: port || 5900
+            };
+            socket.send(JSON.stringify(connectMsg));
+        };
+
+        socket.onmessage = (event) => {
+            if (typeof event.data === 'string') {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'connected') {
+                    setStatus('vnc', `VNC proxy connected to ${host}:${port}`, true);
+                    // Now initialize noVNC RFB with the same WebSocket
+                    // But note: noVNC expects to manage the WebSocket itself.
+                    // Simpler: after "connected", we hand over the WebSocket to noVNC.
+                    // However, we already used the socket for the handshake.
+                    // Better approach: reuse the same socket? noVNC expects a fresh WebSocket.
+                    // Alternative: create a second WebSocket for VNC data only.
+                    // For simplicity, we'll close this socket and open a new one dedicated to VNC.
+                    socket.close();
+                    // Now create a new WebSocket just for VNC RFB (no JSON handshake)
+                    const vncWs = new WebSocket(BACKEND_WS_URL);
+                    vncWs.binaryType = 'arraybuffer';
+                    vncWs.onopen = () => {
+                        // Send a one-time JSON to identify VNC session
+                        vncWs.send(JSON.stringify({
+                            type: 'connect',
+                            protocol: 'vnc',
+                            host, port: port || 5900
+                        }));
+                        // After that, all messages are binary RFB
+                        const container = document.getElementById('vnc-canvas');
+                        container.innerHTML = ''; // clear old canvas
+                        rfb = new RFB(container, vncWs, {});
+                        rfb.addEventListener("connect", () => {
+                            setStatus('vnc', `VNC connected to ${host}:${port}`, true);
+                        });
+                        rfb.addEventListener("disconnect", () => {
+                            setStatus('vnc', 'VNC disconnected', false);
+                            rfb = null;
+                        });
+                        rfb.addEventListener("credentialsrequired", () => {
+                            // Prompt for VNC password if needed
+                            const pass = prompt("VNC password required:");
+                            rfb.sendCredentials({ password: pass });
+                        });
+                    };
+                    vncWs.onerror = () => setStatus('vnc', 'WebSocket error', false);
+                    vncWs.onclose = () => {
+                        setStatus('vnc', 'Disconnected', false);
+                        rfb = null;
+                    };
+                    // Store the new socket in a separate variable to close later
+                    window.activeVncSocket = vncWs;
+                } else if (msg.type === 'error') {
+                    setStatus('vnc', `Error: ${msg.message}`, false);
+                    socket.close();
+                } else if (msg.type === 'closed') {
+                    setStatus('vnc', 'VNC session closed', false);
+                    socket.close();
+                }
+            }
+        };
+
+        socket.onerror = () => setStatus('vnc', 'WebSocket error', false);
+        socket.onclose = () => {
+            // Only clear if we haven't handed over
+            if (currentProtocol === 'vnc' && !window.activeVncSocket) {
+                setStatus('vnc', 'Disconnected', false);
+                socket = null;
+                currentProtocol = null;
+            }
+        };
     }
 
-    document.getElementById('connectBtn').onclick = connect;
-    document.getElementById('disconnectBtn').onclick = disconnect;
+    function disconnectVNC() {
+        if (window.activeVncSocket) {
+            window.activeVncSocket.close();
+            window.activeVncSocket = null;
+        }
+        if (rfb) {
+            rfb.disconnect();
+            rfb = null;
+        }
+        setStatus('vnc', 'Disconnected', false);
+        if (socket && socket.readyState === WebSocket.OPEN) socket.close();
+        socket = null;
+        currentProtocol = null;
+        document.getElementById('vnc-canvas').innerHTML = '';
+    }
+
+    // Tab switching
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            const target = tab.dataset.tab;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            document.getElementById(`${target}-tab`).classList.add('active');
+            // Resize terminal if SSH becomes visible
+            if (target === 'ssh' && fitAddon) setTimeout(() => fitAddon.fit(), 100);
+        });
+    });
+
+    document.getElementById('ssh-connect').addEventListener('click', connectSSH);
+    document.getElementById('ssh-disconnect').addEventListener('click', () => disconnect('ssh'));
+    document.getElementById('vnc-connect').addEventListener('click', connectVNC);
+    document.getElementById('vnc-disconnect').addEventListener('click', disconnectVNC);
 </script>
 </body>
 </html>
