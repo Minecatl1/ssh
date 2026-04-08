@@ -41,6 +41,12 @@ jobs:
           echo "Then open: https://<your-github-pages-url>/?ws=<tunnel-url-wss>"
           echo "==========================================="
           # Keep the runner alive
+      - name: Setup cloudflared
+        uses: AnimMouse/setup-cloudflared@v2
+      - name: Start Cloudflare Tunnel
+        run: cloudflared tunnel --url http://localhost:3000 &
+
+      
       - name: keep alive
         run: |
           sleep infinity
